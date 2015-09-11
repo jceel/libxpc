@@ -173,10 +173,8 @@ unix_send(xpc_port_t local, xpc_port_t remote, struct iovec *iov, int niov, stru
 	struct unix_port *local_port = (struct unix_port *)local;
 	struct unix_port *remote_port = (struct unix_port *)remote;
 	struct msghdr msg;
-	union {
-	    struct cmsghdr hdr;
-	    struct cmsgcred cred;
-	} cmsg;
+	struct cmsghdr *cmsg;
+	int i, nfds = 0;
 
 	debugf("local=%s, remote=%s, msg=%p, size=%ld",
 	    unix_port_to_string(local), unix_port_to_string(remote),
@@ -186,11 +184,36 @@ unix_send(xpc_port_t local, xpc_port_t remote, struct iovec *iov, int niov, stru
 	msg.msg_namelen = remote_port->sun.sun_len;
 	msg.msg_iov = iov;
 	msg.msg_iovlen = niov;
-	msg.msg_control = (caddr_t) &cmsg;
-	msg.msg_controllen = CMSG_SPACE(sizeof(cmsg));
-	cmsg.hdr.cmsg_type = SCM_CREDS;
-	cmsg.hdr.cmsg_level = SOL_SOCKET;
-	cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(struct cmsgcred));
+	msg.msg_controllen = CMSG_SPACE(sizeof(struct cmsgcred));
+	msg.msg_control = malloc(msg.msg_controllen);
+
+	cmsg = CMSG_FIRSTHDR(&msg);
+	cmsg->cmsg_type = SCM_CREDS;
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_len = CMSG_LEN(sizeof(struct cmsgcred));
+
+	for (i = 0; i < nres; i++) {
+		if (res[i].xr_type == XPC_RESOURCE_FD)
+			nfds++;
+	}
+
+	if (nres > 0) {
+		int *fds;
+
+		msg.msg_controllen = CMSG_SPACE(sizeof(struct cmsgcred)) +
+		    CMSG_SPACE(nfds * sizeof(int));
+		msg.msg_control = realloc(msg.msg_control, msg.msg_controllen);
+		cmsg = CMSG_NXTHDR(&msg, cmsg);
+		cmsg->cmsg_type = SCM_RIGHTS;
+		cmsg->cmsg_level = SOL_SOCKET;
+		cmsg->cmsg_len = CMSG_LEN(nres * sizeof(int));
+		fds = (int *)CMSG_DATA(cmsg);
+
+		for (i = 0; i < nres; i++) {
+			if (res[i].xr_type == XPC_RESOURCE_FD)
+				*fds++ = res[i].xr_fd;
+		}
+	}
 
 	if (sendmsg(local_port->socket, &msg, 0) < 0)
 		return (-1);
@@ -205,12 +228,11 @@ unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
 	struct unix_port *port = (struct unix_port *)local;
 	struct unix_port *remote_port;
 	struct msghdr msg;
-	struct cmsgcred *recv_creds;
+	struct cmsghdr *cmsg;
+	struct cmsgcred *recv_creds = NULL;
+	int *recv_fds = NULL;
+	size_t recv_fds_count = 0;
 	ssize_t recvd;
-	union {
-	    struct cmsghdr hdr;
-	    struct cmsgcred cred;
-	} cmsg;
 
 	remote_port = malloc(sizeof(struct unix_port));
 	remote_port->socket = -1;
@@ -227,10 +249,33 @@ unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
 	if (recvd < 0)
 		return (-1);
 
-	recv_creds = (struct cmsgcred *)CMSG_DATA(&cmsg);
-	creds->xc_remote_pid = recv_creds->cmcred_pid;
-	creds->xc_remote_euid = recv_creds->cmcred_euid;
-	creds->xc_remote_guid = recv_creds->cmcred_gid;
+	for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+		if (cmsg->cmsg_type == SCM_CREDS) {
+			recv_creds = (struct cmsgcred *)CMSG_DATA(cmsg);
+			continue;
+		}
+
+		if (cmsg->cmsg_type == SCM_RIGHTS) {
+			recv_fds = (int *)CMSG_DATA(cmsg);
+			recv_fds_count = CMSG_SPACE(cmsg);
+		}
+	}
+
+	if (recv_creds != NULL) {
+		creds->xc_remote_pid = recv_creds->cmcred_pid;
+		creds->xc_remote_euid = recv_creds->cmcred_euid;
+		creds->xc_remote_guid = recv_creds->cmcred_gid;
+	}
+
+	if (recv_fds != NULL) {
+		int i;
+		*res = malloc(sizeof(struct xpc_resource) * recv_fds_count);
+
+		for (i = 0; i < recv_fds_count; i++) {
+			(*res)[i].xr_type = XPC_RESOURCE_FD;
+			(*res)[i].xr_fd = recv_fds[i];
+		}
+	}
 
 	*remote = (xpc_port_t *)remote_port;
 	debugf("local=%s, remote=%s, msg=%p, len=%ld", unix_port_to_string(local), unix_port_to_string(*remote), iov->iov_base, recvd);

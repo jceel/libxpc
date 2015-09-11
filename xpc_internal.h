@@ -158,6 +158,8 @@ struct xpc_connection {
 
 struct xpc_resource {
     	int			xr_type;
+#define XPC_RESOURCE_FD		1
+#define XPC_RESOURCE_SHMEM	2
     	union {
 	    int 		xr_fd;
 	};
