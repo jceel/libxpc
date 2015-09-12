@@ -43,12 +43,6 @@
 
 #define SOCKET_DIR "/var/run/xpc"
 
-struct unix_port
-{
-    	int socket;
-	struct sockaddr_un sun;
-};
-
 static int unix_lookup(const char *name, xpc_port_t *port);
 static int unix_listen(const char *name, xpc_port_t *port);
 static int unix_release(xpc_port_t port);
@@ -68,33 +62,23 @@ static int
 unix_lookup(const char *name, xpc_port_t *port)
 {
 	struct sockaddr_un addr;
-	struct unix_port *ret;
-	struct stat st;
+	int ret;
 	char *path;
 
 	asprintf(&path, "%s/%s", SOCKET_DIR, name);
 
-	if (stat(path, &st) != 0) {
-		return (-1);
-	}
+	ret = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	addr.sun_family = AF_UNIX;
+	addr.sun_len = sizeof(struct sockaddr_un);
+	strncpy(addr.sun_path, path, sizeof(addr.sun_path));
 
-	if (!(st.st_mode & S_IFSOCK)) {
-		return (-1);
-	}
-
-	ret = malloc(sizeof(struct unix_port));
-	ret->socket = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-	ret->sun.sun_family = AF_UNIX;
-	ret->sun.sun_len = sizeof(struct sockaddr_un);
-	strncpy(ret->sun.sun_path, path, sizeof(ret->sun.sun_path));
-
-	if (connect(ret->socket, (struct sockaddr *)&ret->sun,
-	    ret->sun.sun_len) != 0) {
+	if (connect(ret, (struct sockaddr *)&addr,
+	    addr.sun_len) != 0) {
 		debugf("connect failed: %s", strerror(errno));
 		return (-1);
 	}
 
-	*port = ret;
+	*port = (xpc_port_t)(long)ret;
 	return (0);
 }
 
@@ -102,67 +86,41 @@ static int
 unix_listen(const char *name, xpc_port_t *port)
 {
 	struct sockaddr_un addr;
-	struct unix_port *ret;
-	struct stat st;
 	char *path;
-	int nb = 1;
+	int ret;
 
-	if (name != NULL)
-		asprintf(&path, "%s/%s", SOCKET_DIR, name);
-
+	asprintf(&path, "%s/%s", SOCKET_DIR, name);
 	unlink(path);
 
-	ret = malloc(sizeof(struct unix_port));
-	ret->sun.sun_family = AF_UNIX;
-	ret->sun.sun_len = sizeof(struct sockaddr_un);
-	strncpy(ret->sun.sun_path, path, sizeof(ret->sun.sun_path));
+	addr.sun_family = AF_UNIX;
+	addr.sun_len = sizeof(struct sockaddr_un);
+	strncpy(addr.sun_path, path, sizeof(addr.sun_path));
 
-	ret->socket = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-	if (ret->socket == -1) {
-		free(ret);
+	ret = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	if (ret == -1)
 		return (-1);
-	}
 
-	if (bind(ret->socket, (struct sockaddr *)&ret->sun, sizeof(struct sockaddr_un)) != 0) {
+	if (bind(ret, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) != 0) {
 		debugf("bind failed: %s", strerror(errno));
-		free(ret);
 		return (-1);
 	}
 
-	if (listen(ret->socket, 5) != 0) {
+	if (listen(ret, 5) != 0) {
 		debugf("listen failed: %s", strerror(errno));
-		free(ret);
 		return (-1);
 	}
 
-	*port = ret;
+	*port = (xpc_port_t)(long)ret;
 	return (0);
-}
-
-static xpc_port_t
-unix_port_from_fd(int fd)
-{
-	struct unix_port *ret;
-
-	ret = malloc(sizeof(struct unix_port));
-	memset(ret, 0, sizeof(struct unix_port));
-	ret->socket = fd;
-
-	return ((xpc_port_t)ret);
 }
 
 static int
 unix_release(xpc_port_t port)
 {
-	struct unix_port *uport = (struct unix_port *)port;
-	debugf("port=%s", unix_port_to_string(port));
+	int fd = (int)port;
 
-	if (uport->socket != -1) {
-		close(uport->socket);
-		unlink(uport->sun.sun_path);
-	}
-
-	free(uport);
+	if (fd != -1)
+		close(fd);
 
 	return (0);
 }
@@ -170,46 +128,39 @@ unix_release(xpc_port_t port)
 static char *
 unix_port_to_string(xpc_port_t port)
 {
-	struct unix_port *uport = (struct unix_port *)port;
+	int fd = (int)port;
 	char *ret;
 
-	if (uport == NULL) {
-		asprintf(&ret, "<none>");
+	if (fd == -1) {
+		asprintf(&ret, "<invalid>");
 		return (ret);
 	}
 
-	if (uport->socket != -1)
-		asprintf(&ret, "<%s [%d]>", uport->sun.sun_path, uport->socket);
-	else
-		asprintf(&ret, "<%s>", uport->sun.sun_path);
 
+	asprintf(&ret, "<%d>", fd);
 	return (ret);
 }
 
 static int
 unix_port_compare(xpc_port_t p1, xpc_port_t p2)
 {
-	struct unix_port *up1 = (struct unix_port *)p1;
-	struct unix_port *up2 = (struct unix_port *)p2;
-
-	return (strncmp(up1->sun.sun_path, up2->sun.sun_path,
-	    sizeof up1->sun.sun_path));
+	return (int)p1 == (int)p2;
 }
 
 static dispatch_source_t
 unix_create_client_source(xpc_port_t port, void *context, dispatch_queue_t tq)
 {
-	struct unix_port *uport = (struct unix_port *)port;
+	int fd = (int)port;
 	dispatch_source_t ret;
 
 	ret = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
-	    (uintptr_t)uport->socket, 0, tq);
+	    (uintptr_t)fd, 0, tq);
 
 	dispatch_set_context(ret, context);
 	dispatch_source_set_event_handler_f(ret, xpc_connection_recv_message);
 	dispatch_source_set_cancel_handler(ret, ^{
-	    shutdown(uport->socket, SHUT_RDWR);
-	    close(uport->socket);
+	    shutdown(fd, SHUT_RDWR);
+	    close(fd);
 	    xpc_connection_destroy_peer(dispatch_get_context(ret));
 	});
 
@@ -219,20 +170,19 @@ unix_create_client_source(xpc_port_t port, void *context, dispatch_queue_t tq)
 static dispatch_source_t
 unix_create_server_source(xpc_port_t port, void *context, dispatch_queue_t tq)
 {
-	struct unix_port *uport = (struct unix_port *)port;
+	int fd = (int)port;
 	void *client_ctx;
 	dispatch_source_t ret;
 
 	ret = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
-	    (uintptr_t)uport->socket, 0, tq);
+	    (uintptr_t)fd, 0, tq);
 	dispatch_source_set_event_handler(ret, ^{
 	    	int sock;
 	    	xpc_port_t client_port;
 	    	dispatch_source_t client_source;
-	    	void *ctx;
 
-	    	sock = accept(uport->socket, NULL, NULL);
-	    	client_port = unix_port_from_fd(sock);
+	    	sock = accept(fd, NULL, NULL);
+	    	client_port = (xpc_port_t)(long)sock;
 	    	client_source = unix_create_client_source(client_port, NULL, tq);
 	    	xpc_connection_new_peer(context, client_port, client_source);
 	});
@@ -241,11 +191,10 @@ unix_create_server_source(xpc_port_t port, void *context, dispatch_queue_t tq)
 }
 
 static int
-unix_send(xpc_port_t local, xpc_port_t remote, struct iovec *iov, int niov,
-    struct xpc_resource *res, size_t nres)
+unix_send(xpc_port_t local, xpc_port_t remote __unused, struct iovec *iov,
+    int niov, struct xpc_resource *res, size_t nres)
 {
-	struct unix_port *local_port = (struct unix_port *)local;
-	struct unix_port *remote_port = (struct unix_port *)remote;
+	int fd = (int)local;
 	struct msghdr msg;
 	struct cmsghdr *cmsg;
 	int i, nfds = 0;
@@ -288,7 +237,7 @@ unix_send(xpc_port_t local, xpc_port_t remote, struct iovec *iov, int niov,
 		}
 	}
 
-	if (sendmsg(local_port->socket, &msg, 0) < 0)
+	if (sendmsg(fd, &msg, 0) < 0)
 		return (-1);
 
 	return (0);
@@ -298,8 +247,7 @@ static int
 unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
     struct xpc_resource **res, size_t *nres, struct xpc_credentials *creds)
 {
-	struct unix_port *port = (struct unix_port *)local;
-	struct unix_port *remote_port;
+	int fd = (int)local;
 	struct msghdr msg;
 	struct cmsghdr *cmsg;
 	struct cmsgcred *recv_creds = NULL;
@@ -307,17 +255,14 @@ unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
 	size_t recv_fds_count = 0;
 	ssize_t recvd;
 
-	remote_port = malloc(sizeof(struct unix_port));
-	remote_port->socket = -1;
-
-	msg.msg_name = &remote_port->sun;
-	msg.msg_namelen = sizeof(struct sockaddr_un);
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
 	msg.msg_iov = iov;
 	msg.msg_iovlen = niov;
 	msg.msg_control = malloc(4096);
 	msg.msg_controllen = 4096;
 
-	recvd = recvmsg(port->socket, &msg, 0);
+	recvd = recvmsg(fd, &msg, 0);
 	if (recvd < 0)
 		return (-1);
 
@@ -356,7 +301,7 @@ unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
 		}
 	}
 
-	*remote = (xpc_port_t *)remote_port;
+	*remote = NULL;
 	debugf("local=%s, remote=%s, msg=%p, len=%ld",
 	    unix_port_to_string(local), unix_port_to_string(*remote),
 	    iov->iov_base, recvd);
