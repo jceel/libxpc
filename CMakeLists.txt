@@ -59,8 +59,14 @@ set(SOURCES
     ${UNIX_TRANSPORT_SOURCES}
 )
 
+option(XPC_DEBUG "Adds debugging output" OFF)
+
+if(XPC_DEBUG)
+    add_definitions(-DXPC_DEBUG)
+endif()
+
 include_directories(/usr/local/include)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fblocks")
-add_library(libxpc SHARED ${SOURCES})
+add_library(xpc SHARED ${SOURCES})
 add_subdirectory(examples)

@@ -155,20 +155,22 @@ unix_port_compare(xpc_port_t p1, xpc_port_t p2)
 	struct unix_port *up1 = (struct unix_port *)p1;
 	struct unix_port *up2 = (struct unix_port *)p2;
 
-	return (strncmp(up1->sun.sun_path, up2->sun.sun_path, sizeof up1->sun.sun_path));
+	return (strncmp(up1->sun.sun_path, up2->sun.sun_path,
+	    sizeof up1->sun.sun_path));
 }
 
 static dispatch_source_t
 unix_create_source(xpc_port_t port, dispatch_queue_t tq)
 {
 	struct unix_port *uport = (struct unix_port *)port;
-	dispatch_source_t source;
 
-	return (dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)uport->socket, 0, tq));
+	return (dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
+	    (uintptr_t)uport->socket, 0, tq));
 }
 
 static int
-unix_send(xpc_port_t local, xpc_port_t remote, struct iovec *iov, int niov, struct xpc_resource *res, size_t nres)
+unix_send(xpc_port_t local, xpc_port_t remote, struct iovec *iov, int niov,
+    struct xpc_resource *res, size_t nres)
 {
 	struct unix_port *local_port = (struct unix_port *)local;
 	struct unix_port *remote_port = (struct unix_port *)remote;
@@ -249,7 +251,8 @@ unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
 	if (recvd < 0)
 		return (-1);
 
-	for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+	for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL;
+	     cmsg = CMSG_NXTHDR(&msg, cmsg)) {
 		if (cmsg->cmsg_type == SCM_CREDS) {
 			recv_creds = (struct cmsgcred *)CMSG_DATA(cmsg);
 			continue;

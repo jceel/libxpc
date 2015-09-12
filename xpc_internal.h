@@ -32,12 +32,16 @@
 #include <sys/uio.h>
 #include "mpack.h"
 
+#ifdef XPC_DEBUG
 #define debugf(...) 				\
     do { 					\
     	fprintf(stderr, "%s: ", __func__);	\
     	fprintf(stderr, __VA_ARGS__);		\
     	fprintf(stderr, "\n");			\
     } while(0);
+#else
+#define debugf(...)
+#endif
 
 #define _XPC_TYPE_INVALID		0
 #define _XPC_TYPE_DICTIONARY		1
@@ -158,8 +162,8 @@ struct xpc_connection {
 
 struct xpc_resource {
     	int			xr_type;
-#define XPC_RESOURCE_FD		1
-#define XPC_RESOURCE_SHMEM	2
+#define XPC_RESOURCE_FD		0x01
+#define XPC_RESOURCE_SHMEM	0x02
     	union {
 	    int 		xr_fd;
 	};
