@@ -73,6 +73,7 @@ TAILQ_HEAD(xpc_dict_head, xpc_dict_pair);
 TAILQ_HEAD(xpc_array_head, xpc_object);
 
 typedef void *xpc_port_t;
+typedef void (*xpc_transport_init_t)();
 typedef int (*xpc_transport_listen_t)(const char *, xpc_port_t *);
 typedef int (*xpc_transport_lookup)(const char *, xpc_port_t *);
 typedef char *(*xpc_transport_port_to_string)(xpc_port_t);
@@ -83,7 +84,7 @@ typedef int (*xpc_transport_send)(xpc_port_t, xpc_port_t, struct iovec *iov,
 typedef int(*xpc_transport_recv)(xpc_port_t, xpc_port_t*, struct iovec *iov,
     int niov, struct xpc_resource **, size_t *, struct xpc_credentials *);
 typedef dispatch_source_t (*xpc_transport_create_source)(xpc_port_t,
-    dispatch_queue_t);
+    void *, dispatch_queue_t);
 
 typedef union {
 	struct xpc_dict_head dict;
@@ -171,6 +172,8 @@ struct xpc_resource {
 
 struct xpc_transport {
     	const char *		xt_name;
+    	pthread_once_t		xt_initialized;
+    	xpc_transport_init_t 	xt_init;
     	xpc_transport_listen_t 	xt_listen;
     	xpc_transport_lookup 	xt_lookup;
     	xpc_transport_port_to_string xt_port_to_string;
@@ -178,7 +181,8 @@ struct xpc_transport {
     	xpc_transport_release 	xt_release;
     	xpc_transport_send 	xt_send;
     	xpc_transport_recv	xt_recv;
-    	xpc_transport_create_source xt_create_source;
+    	xpc_transport_create_source xt_create_server_source;
+    	xpc_transport_create_source xt_create_client_source;
 };
 
 struct xpc_service {
@@ -208,6 +212,10 @@ __private_extern__ const char *_xpc_get_type_name(xpc_object_t obj);
 __private_extern__ struct xpc_object *mpack2xpc(mpack_node_t node);
 __private_extern__ void xpc2mpack(mpack_writer_t *writer, xpc_object_t xo);
 __private_extern__ void xpc_object_destroy(struct xpc_object *xo);
+__private_extern__ void xpc_connection_recv_message(void *);
+__private_extern__ void *xpc_connection_new_peer(void *context,
+    xpc_port_t port, dispatch_source_t src);
+__private_extern__ void xpc_connection_destroy_peer(void *context);
 __private_extern__ int xpc_pipe_send(xpc_object_t obj, uint64_t id,
     xpc_port_t local, xpc_port_t remote);
 __private_extern__ int xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote,

@@ -45,6 +45,11 @@ main(int argc, char *argv[])
 
 	xpc_connection_set_event_handler(conn, ^(xpc_object_t peer) {
 		xpc_connection_set_event_handler(peer, ^(xpc_object_t event) {
+		    	if (event == XPC_ERROR_CONNECTION_INVALID) {
+				printf("Connection closed by remote end\n");
+				return;
+			}
+
 			printf("Message received: %p\n", event);
 			printf("%s\n", xpc_copy_description(event));
 

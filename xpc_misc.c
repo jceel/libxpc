@@ -31,7 +31,7 @@
 #include <machine/atomic.h>
 #include <assert.h>
 #include <syslog.h>
-#include <stdarg.h>
+#include <pthread.h>
 #include "xpc/xpc.h"
 #include "xpc_internal.h"
 
@@ -369,13 +369,20 @@ xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote, xpc_object_t *result,
 	struct xpc_resource *resources;
 	struct iovec iov;
 	size_t nresources;
+	int ret;
 
 	iov.iov_base = malloc(65535);
 	iov.iov_len = 65535;
 
-	if (transport->xt_recv(local, remote, &iov, 1, &resources, &nresources, creds) != 0) {
+	ret = transport->xt_recv(local, remote, &iov, 1, &resources, &nresources, creds);
+	if (ret < 0) {
 		debugf("transport receive function failed: %s", strerror(errno));
 		return (-1);
+	}
+
+	if (ret == 0) {
+		debugf("remote side closed connection, port=%s", transport->xt_port_to_string(local));
+		return (ret);
 	}
 
 	*id = *(uint64_t *)iov.iov_base;
@@ -384,5 +391,5 @@ xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote, xpc_object_t *result,
 	if (*result == NULL)
 		return (-1);
 
-	return (0);
+	return (ret);
 }

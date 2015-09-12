@@ -33,7 +33,6 @@
 
 #define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_long(&conn->xc_last_id, 1))
 
-static void xpc_connection_recv_message();
 static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
 
 xpc_connection_t
@@ -67,12 +66,6 @@ xpc_connection_create(const char *name, dispatch_queue_t targetq)
 	/* Receive queue is initially suspended */
 	dispatch_suspend(conn->xc_recv_queue);
 
-	/* Create local port */
-	if (transport->xt_listen(NULL, &conn->xc_local_port) != 0) {
-		debugf("Cannot create local port: %s", strerror(errno));
-		return (NULL);
-	}
-
 	return ((xpc_connection_t)conn);
 }
 
@@ -90,15 +83,15 @@ xpc_connection_create_mach_service(const char *name, dispatch_queue_t targetq,
 	conn->xc_flags = flags;
 
 	if (flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) {
-		transport->xt_release(conn->xc_local_port);
-
 		if (transport->xt_listen(name, &conn->xc_local_port) != 0) {
 			debugf("Cannot create local port: %s", strerror(errno));
 			return (NULL);
 		}
+
+		return ((xpc_connection_t)conn);
 	}
 
-	if (transport->xt_lookup(name, &conn->xc_remote_port) != 0) {
+	if (transport->xt_lookup(name, &conn->xc_local_port) != 0) {
 		return (NULL);
 	}
 
@@ -159,13 +152,16 @@ xpc_connection_resume(xpc_connection_t xconn)
 	conn = (struct xpc_connection *)xconn;
 
 	/* Create dispatch source for top-level connection */
-	if (conn->xc_parent == NULL) {
-		conn->xc_recv_source = transport->xt_create_source(
-		    conn->xc_local_port, conn->xc_recv_queue);
-		dispatch_set_context(conn->xc_recv_source, conn);
-		dispatch_source_set_event_handler_f(conn->xc_recv_source,
-		    xpc_connection_recv_message);
+	if (conn->xc_flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) {
+		conn->xc_recv_source = transport->xt_create_server_source(
+		    conn->xc_local_port, conn, conn->xc_recv_queue);
 		dispatch_resume(conn->xc_recv_source);
+	} else {
+		if (conn->xc_parent == NULL) {
+			conn->xc_recv_source = transport->xt_create_client_source(
+			    conn->xc_local_port, conn, conn->xc_recv_queue);
+			dispatch_resume(conn->xc_recv_source);
+		}
 	}
 
 	dispatch_resume(conn->xc_recv_queue);
@@ -372,6 +368,98 @@ xpc_connection_set_credentials(struct xpc_connection *conn, audit_token_t *tok)
 }
 #endif
 
+void *
+xpc_connection_new_peer(void *context, xpc_port_t port, dispatch_source_t src)
+{
+	struct xpc_transport *transport = xpc_get_transport();
+	struct xpc_connection *conn, *peer;
+
+	conn = context;
+	debugf("port=%s", transport->xt_port_to_string(port));
+	peer = (struct xpc_connection *)xpc_connection_create(NULL, NULL);
+	peer->xc_parent = conn;
+	peer->xc_local_port = port;
+	peer->xc_remote_port = port;
+	peer->xc_recv_source = src;
+
+	TAILQ_INSERT_TAIL(&conn->xc_peers, peer, xc_link);
+
+	dispatch_set_context(src, peer);
+	dispatch_resume(src);
+
+	dispatch_async(conn->xc_target_queue, ^{
+	    conn->xc_handler(peer);
+	});
+
+	return (peer);
+}
+
+void
+xpc_connection_destroy_peer(void *context)
+{
+	struct xpc_connection *conn, *parent;
+
+	conn = context;
+
+	if (conn->xc_parent != NULL) {
+		parent = conn->xc_parent;
+		dispatch_async(parent->xc_target_queue, ^{
+		    conn->xc_handler((xpc_object_t)XPC_ERROR_CONNECTION_INVALID);
+		});
+	}
+
+	dispatch_release(conn->xc_recv_source);
+}
+
+void
+xpc_connection_recv_message(void *context)
+{
+	struct xpc_pending_call *call;
+	struct xpc_connection *conn;
+	struct xpc_credentials creds;
+	xpc_object_t result;
+	xpc_port_t remote;
+	uint64_t id;
+	int err;
+
+	debugf("connection=%p", context);
+
+	conn = context;
+	err = xpc_pipe_receive(conn->xc_local_port, &remote, &result, &id,
+	    &creds);
+
+	if (err < 0)
+		return;
+
+	if (err == 0) {
+		dispatch_source_cancel(conn->xc_recv_source);
+		return;
+	}
+
+	debugf("msg=%p, id=%lu", result, id);
+
+	conn->xc_creds = creds;
+
+	TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
+		if (call->xp_id == id) {
+			dispatch_async(conn->xc_target_queue, ^{
+			    call->xp_handler(result);
+			    TAILQ_REMOVE(&conn->xc_pending, call,
+				xp_link);
+			    free(call);
+			});
+			return;
+		}
+	}
+
+	if (conn->xc_handler) {
+		dispatch_async(conn->xc_target_queue, ^{
+		    conn->xc_handler(result);
+		});
+	}
+}
+
+#if 0
 static void
 xpc_connection_recv_message(void *context)
 {
@@ -446,3 +534,4 @@ xpc_connection_recv_message(void *context)
 		}
 	}
 }
+#endif

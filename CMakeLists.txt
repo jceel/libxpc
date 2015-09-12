@@ -62,6 +62,7 @@ set(SOURCES
 option(XPC_DEBUG "Adds debugging output" OFF)
 
 if(XPC_DEBUG)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
     add_definitions(-DXPC_DEBUG)
 endif()
 

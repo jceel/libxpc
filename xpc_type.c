@@ -60,6 +60,15 @@ typedef const struct _xpc_bool_s xb;
 xb _xpc_bool_true;
 xb _xpc_bool_false;
 
+struct _xpc_dictionary_s {
+};
+
+typedef const struct _xpc_dictionary_s xs;
+
+xs _xpc_error_connection_interrupted;
+xs _xpc_error_connection_invalid;
+xs _xpc_error_connection_imminent;
+
 static size_t xpc_data_hash(const uint8_t *data, size_t length);
 
 static xpc_type_t xpc_typemap[] = {
