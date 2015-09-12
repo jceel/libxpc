@@ -254,7 +254,7 @@ xpc_connection_get_euid(xpc_connection_t xconn)
 }
 
 gid_t
-xpc_connection_get_guid(xpc_connection_t xconn)
+xpc_connection_get_egid(xpc_connection_t xconn)
 {
 	struct xpc_connection *conn;
 

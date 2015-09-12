@@ -118,7 +118,7 @@ xpc2mpack(mpack_writer_t *writer, xpc_object_t obj)
 
 	case _XPC_TYPE_ARRAY:
 		mpack_start_array(writer, xpc_array_get_count(obj));
-		xpc_array_apply(obj, ^(size_t index, xpc_object_t v) {
+		xpc_array_apply(obj, ^(size_t index __unused, xpc_object_t v) {
 		    xpc2mpack(writer, v);
 		    return ((bool)true);
 		});
@@ -172,8 +172,7 @@ xpc_dictionary_create(const char * const *keys, const xpc_object_t *values,
 xpc_object_t
 xpc_dictionary_create_reply(xpc_object_t original)
 {
-	struct xpc_object *xo, *xo_orig;
-	xpc_u val;
+	struct xpc_object *xo_orig;
 
 	xo_orig = original;
 	if ((xo_orig->xo_flags & _XPC_FROM_WIRE) == 0)
@@ -233,7 +232,7 @@ void
 xpc_dictionary_set_value(xpc_object_t xdict, const char *key,
         xpc_object_t value)
 {
-	struct xpc_object *xo, *xotmp;
+	struct xpc_object *xo;
 	struct xpc_dict_head *head;
 	struct xpc_dict_pair *pair;
 

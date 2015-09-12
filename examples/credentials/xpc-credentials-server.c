@@ -47,7 +47,7 @@ main(int argc, char *argv[])
 		xpc_connection_set_event_handler(peer, ^(xpc_object_t event) {
 			printf("Message received: %p\n", event);
 			printf("Client UID: %d\n", xpc_connection_get_euid(peer));
-			printf("Client GID: %d\n", xpc_connection_get_guid(peer));
+			printf("Client GID: %d\n", xpc_connection_get_egid(peer));
 			printf("Client PID: %d\n", xpc_connection_get_pid(peer));
 
 			xpc_object_t resp = xpc_dictionary_create(NULL, NULL, 0);

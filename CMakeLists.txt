@@ -68,6 +68,6 @@ endif()
 
 include_directories(/usr/local/include)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fblocks")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fblocks -Wall -Wextra")
 add_library(xpc SHARED ${SOURCES})
 add_subdirectory(examples)
