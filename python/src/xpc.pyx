@@ -254,3 +254,8 @@ cdef class XPCConnection(object):
 
     def send_with_reply_sync(self, obj):
         pass
+
+
+def main():
+    with nogil:
+        xpc.xpc_main(NULL);

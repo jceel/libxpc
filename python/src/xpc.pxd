@@ -45,7 +45,7 @@ cdef extern from "dispatch/dispatch.h":
         pass
 
 
-cdef extern from "blocks_wrapper.h":
+cdef extern from "blocks_wrapper.h" nogil:
     ctypedef int (*xpc_dictionary_applier_func_t)(const char *, xpc_object_t, void *)
     ctypedef int (*xpc_array_applier_func_t)(size_t, xpc_object_t, void *)
     ctypedef void (*xpc_handler_func_t)(xpc_object_t, void *)
@@ -57,7 +57,7 @@ cdef extern from "blocks_wrapper.h":
         void *)
 
 
-cdef extern from "xpc/xpc.h":
+cdef extern from "xpc/xpc.h" nogil:
     ctypedef struct xpc_connection_t:
         pass
 
@@ -195,3 +195,4 @@ cdef extern from "xpc/xpc.h":
     cdef void* xpc_connection_get_context(xpc_connection_t connection)
 #    cdef void xpc_connection_set_finalizer_f(xpc_connection_t connection, xpc_finalizer_t finalizer)
     cdef xpc_endpoint_t xpc_endpoint_create(xpc_connection_t connection)
+    cdef void xpc_main(void *handler)

@@ -30,7 +30,13 @@ from Cython.Build import cythonize
 
 
 extensions = [
-    Extension("xpc", ["src/xpc.pyx", "src/blocks_wrapper.c"], extra_compile_args=["-g"])
+    Extension(
+    	"xpc",
+    	["src/xpc.pyx", "src/blocks_wrapper.c"],
+    	extra_compile_args=["-g", "-fblocks", "-I/usr/local/include", "-I.."],
+    	extra_link_args=["-L.."],
+    	libraries=["BlocksRuntime", "dispatch", "sbuf", "xpc"]
+    )
 ]
 
 
