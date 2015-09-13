@@ -436,6 +436,50 @@ xpc_equal(xpc_object_t x1, xpc_object_t x2)
 	return (false);
 }
 
+xpc_object_t
+xpc_copy(xpc_object_t obj)
+{
+	struct xpc_object *xo, *xotmp;
+	const void *newdata;
+
+	xo = obj;
+	switch (xo->xo_xpc_type) {
+		case _XPC_TYPE_BOOL:
+		case _XPC_TYPE_INT64:
+		case _XPC_TYPE_UINT64:
+		case _XPC_TYPE_DATE:
+		case _XPC_TYPE_ENDPOINT:
+			return _xpc_prim_create(xo->xo_xpc_type, xo->xo_u, 1);
+
+		case _XPC_TYPE_STRING:
+			return xpc_string_create(strdup(
+			    xpc_string_get_string_ptr(xo)));
+
+		case _XPC_TYPE_DATA:
+			newdata = xpc_data_get_bytes_ptr(obj);
+			return (xpc_data_create(newdata,
+			    xpc_data_get_length(obj)));
+
+		case _XPC_TYPE_DICTIONARY:
+			xotmp = xpc_dictionary_create(NULL, NULL, 0);
+			xpc_dictionary_apply(obj, ^(const char *k, xpc_object_t v) {
+			    xpc_dictionary_set_value(xotmp, k, xpc_copy(v));
+			    return (bool)true;
+			});
+			return (xotmp);
+
+		case _XPC_TYPE_ARRAY:
+			xotmp = xpc_array_create(NULL, 0);
+			xpc_array_apply(obj, ^(size_t idx, xpc_object_t v) {
+			    xpc_array_set_value(xotmp, idx, xpc_copy(v));
+			    return ((bool)true);
+			});
+			return (xotmp);
+	}
+
+	return (0);
+}
+
 static size_t
 xpc_data_hash(const uint8_t *data, size_t length)
 {
