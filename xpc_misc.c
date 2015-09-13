@@ -35,6 +35,8 @@
 #include "xpc/xpc.h"
 #include "xpc_internal.h"
 
+#define RECV_BUFFER_SIZE	65536
+
 static void xpc_copy_description_level(xpc_object_t obj, struct sbuf *sbuf,
     int level);
 
@@ -86,16 +88,32 @@ xpc_array_destroy(struct xpc_object *dict)
 }
 
 static int
-xpc_pack(struct xpc_object *xo, void **buf, size_t *size)
+xpc_pack(struct xpc_object *xo, void **buf, uint64_t id, size_t *size)
 {
+	struct xpc_frame_header *header;
 	mpack_writer_t writer;
+	char *packed, *ret;
+	size_t packed_size;
 
-	mpack_writer_init_growable(&writer, (char **)buf, size);
+	mpack_writer_init_growable(&writer, &packed, &packed_size);
 	xpc2mpack(&writer, xo);
 
 	if (mpack_writer_destroy(&writer) != mpack_ok)
 		return (-1);
 
+	ret = malloc(packed_size + sizeof(*header));
+	memset(ret, 0, packed_size + sizeof(*header));
+
+	header = (struct xpc_frame_header *)ret;
+	header->length = packed_size;
+	header->id = id;
+	header->version = XPC_PROTOCOL_VERSION;
+
+	memcpy(ret + sizeof(*header), packed, packed_size);
+	*buf = ret;
+	*size = packed_size + sizeof(*header);
+
+	free(packed);
 	return (0);
 }
 
@@ -341,19 +359,17 @@ int
 xpc_pipe_send(xpc_object_t xobj, uint64_t id, xpc_port_t local, xpc_port_t remote)
 {
 	struct xpc_transport *transport = xpc_get_transport();
-	struct iovec iov[2];
+	void *buf;
+	size_t size;
 
 	assert(xpc_get_type(xobj) == &_xpc_type_dictionary);
 
-	iov[0].iov_base = (void *)&id;
-	iov[0].iov_len = sizeof(uint64_t);
-
-	if (xpc_pack(xobj, &iov[1].iov_base, &iov[1].iov_len) != 0) {
+	if (xpc_pack(xobj, &buf, id, &size) != 0) {
 		debugf("pack failed");
 		return (-1);
 	}
 
-	if (transport->xt_send(local, remote, (struct iovec *)&iov, 2, NULL, 0) != 0) {
+	if (transport->xt_send(local, remote, buf, size, NULL, 0) != 0) {
 		debugf("transport send function failed: %s", strerror(errno));
 		return (-1);
 	}
@@ -367,14 +383,15 @@ xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote, xpc_object_t *result,
 {
 	struct xpc_transport *transport = xpc_get_transport();
 	struct xpc_resource *resources;
-	struct iovec iov;
+	struct xpc_frame_header *header;
+	void *buffer;
 	size_t nresources;
 	int ret;
 
-	iov.iov_base = malloc(65535);
-	iov.iov_len = 65535;
+	buffer = malloc(RECV_BUFFER_SIZE);
 
-	ret = transport->xt_recv(local, remote, &iov, 1, &resources, &nresources, creds);
+	ret = transport->xt_recv(local, remote, buffer, RECV_BUFFER_SIZE,
+	    &resources, &nresources, creds);
 	if (ret < 0) {
 		debugf("transport receive function failed: %s", strerror(errno));
 		return (-1);
@@ -385,11 +402,23 @@ xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote, xpc_object_t *result,
 		return (ret);
 	}
 
-	*id = *(uint64_t *)iov.iov_base;
-	*result = xpc_unpack(iov.iov_base + sizeof(uint64_t), iov.iov_len - sizeof(uint64_t));
+	header = (struct xpc_frame_header *)buffer;
+	if (header->length > (ret - sizeof(*header))) {
+		debugf("invalid message length");
+		return (-1);
+	}
+
+	if (header->version != XPC_PROTOCOL_VERSION) {
+		debugf("invalid protocol version")
+		return (-1);
+	}
+
+	*id = header->id;
+	*result = xpc_unpack(buffer + sizeof(*header), header->length);
 
 	if (*result == NULL)
 		return (-1);
 
+	free(buffer);
 	return (ret);
 }

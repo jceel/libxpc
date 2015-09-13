@@ -52,10 +52,10 @@ static dispatch_source_t unix_create_client_source(xpc_port_t port, void *,
     dispatch_queue_t tq);
 static dispatch_source_t unix_create_server_source(xpc_port_t port, void *,
     dispatch_queue_t tq);
-static int unix_send(xpc_port_t local, xpc_port_t remote, struct iovec *iov,
-    int niov, struct xpc_resource *res, size_t nres);
-static int unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov,
-    int niov, struct xpc_resource **res, size_t *nres,
+static int unix_send(xpc_port_t local, xpc_port_t remote, void *buf,
+    size_t len, struct xpc_resource *res, size_t nres);
+static int unix_recv(xpc_port_t local, xpc_port_t *remote, void *buf,
+    size_t len, struct xpc_resource **res, size_t *nres,
     struct xpc_credentials *creds);
 
 static int
@@ -191,21 +191,22 @@ unix_create_server_source(xpc_port_t port, void *context, dispatch_queue_t tq)
 }
 
 static int
-unix_send(xpc_port_t local, xpc_port_t remote __unused, struct iovec *iov,
-    int niov, struct xpc_resource *res, size_t nres)
+unix_send(xpc_port_t local, xpc_port_t remote __unused, void *buf, size_t len,
+    struct xpc_resource *res, size_t nres)
 {
 	int fd = (int)local;
 	struct msghdr msg;
 	struct cmsghdr *cmsg;
+	struct iovec iov = { .iov_base = buf, .iov_len = len };
 	int i, nfds = 0;
 
 	debugf("local=%s, remote=%s, msg=%p, size=%ld",
 	    unix_port_to_string(local), unix_port_to_string(remote),
-	    iov->iov_base, iov->iov_len);
+	    buf, len);
 
 	memset(&msg, 0, sizeof(struct msghdr));
-	msg.msg_iov = iov;
-	msg.msg_iovlen = niov;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
 	msg.msg_controllen = CMSG_SPACE(sizeof(struct cmsgcred));
 	msg.msg_control = malloc(msg.msg_controllen);
 
@@ -244,21 +245,22 @@ unix_send(xpc_port_t local, xpc_port_t remote __unused, struct iovec *iov,
 }
 
 static int
-unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
+unix_recv(xpc_port_t local, xpc_port_t *remote, void *buf, size_t len,
     struct xpc_resource **res, size_t *nres, struct xpc_credentials *creds)
 {
 	int fd = (int)local;
 	struct msghdr msg;
 	struct cmsghdr *cmsg;
 	struct cmsgcred *recv_creds = NULL;
+	struct iovec iov = { .iov_base = buf, .iov_len = len };
 	int *recv_fds = NULL;
 	size_t recv_fds_count = 0;
 	ssize_t recvd;
 
 	msg.msg_name = NULL;
 	msg.msg_namelen = 0;
-	msg.msg_iov = iov;
-	msg.msg_iovlen = niov;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
 	msg.msg_control = malloc(4096);
 	msg.msg_controllen = 4096;
 
@@ -304,7 +306,7 @@ unix_recv(xpc_port_t local, xpc_port_t *remote, struct iovec *iov, int niov,
 	*remote = NULL;
 	debugf("local=%s, remote=%s, msg=%p, len=%ld",
 	    unix_port_to_string(local), unix_port_to_string(*remote),
-	    iov->iov_base, recvd);
+	    buf, recvd);
 
 	return (recvd);
 }

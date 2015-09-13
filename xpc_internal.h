@@ -62,7 +62,8 @@
 #define _XPC_TYPE_DOUBLE		17
 #define _XPC_TYPE_MAX			_XPC_TYPE_DOUBLE
 
-#define	XPC_SEQID	"XPC sequence number"
+#define	XPC_SEQID		"XPC sequence number"
+#define	XPC_PROTOCOL_VERSION	1
 
 struct xpc_object;
 struct xpc_dict_pair;
@@ -79,10 +80,10 @@ typedef int (*xpc_transport_lookup)(const char *, xpc_port_t *);
 typedef char *(*xpc_transport_port_to_string)(xpc_port_t);
 typedef int (*xpc_transport_port_compare)(xpc_port_t, xpc_port_t);
 typedef int (*xpc_transport_release)(xpc_port_t);
-typedef int (*xpc_transport_send)(xpc_port_t, xpc_port_t, struct iovec *iov,
-    int niov, struct xpc_resource *, size_t);
-typedef int(*xpc_transport_recv)(xpc_port_t, xpc_port_t*, struct iovec *iov,
-    int niov, struct xpc_resource **, size_t *, struct xpc_credentials *);
+typedef int (*xpc_transport_send)(xpc_port_t, xpc_port_t, void *buf,
+    size_t len, struct xpc_resource *, size_t);
+typedef int(*xpc_transport_recv)(xpc_port_t, xpc_port_t*, void *buf,
+    size_t len, struct xpc_resource **, size_t *, struct xpc_credentials *);
 typedef dispatch_source_t (*xpc_transport_create_source)(xpc_port_t,
     void *, dispatch_queue_t);
 
@@ -100,8 +101,14 @@ typedef union {
 #ifdef MACH
 	mach_port_t port;
 #endif
-} xpc_u;	
+} xpc_u;
 
+struct xpc_frame_header {
+    uint64_t version;
+    uint64_t id;
+    uint64_t length;
+    uint64_t spare[4];
+};
 
 #define _XPC_FROM_WIRE 0x1
 struct xpc_object {
