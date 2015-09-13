@@ -400,12 +400,14 @@ xpc_connection_destroy_peer(void *context)
 	struct xpc_connection *conn, *parent;
 
 	conn = context;
+	parent = conn->xc_parent;
 
 	if (conn->xc_parent != NULL) {
-		parent = conn->xc_parent;
 		dispatch_async(parent->xc_target_queue, ^{
 		    conn->xc_handler((xpc_object_t)XPC_ERROR_CONNECTION_INVALID);
 		});
+
+		TAILQ_REMOVE(&parent->xc_peers, conn, xc_link);
 	}
 
 	dispatch_release(conn->xc_recv_source);
@@ -454,6 +456,7 @@ xpc_connection_recv_message(void *context)
 
 	if (conn->xc_handler) {
 		dispatch_async(conn->xc_target_queue, ^{
+		    debugf("calling handler=%p", conn->xc_handler);
 		    conn->xc_handler(result);
 		});
 	}
