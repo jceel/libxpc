@@ -44,9 +44,15 @@ main(int argc, char *argv[])
 	    XPC_CONNECTION_MACH_SERVICE_LISTENER);
 
 	xpc_connection_set_event_handler(conn, ^(xpc_object_t peer) {
+	    	printf("New connection, peer=%p\n", peer);
 		xpc_connection_set_event_handler(peer, ^(xpc_object_t event) {
 		    	if (event == XPC_ERROR_CONNECTION_INVALID) {
 				printf("Connection closed by remote end\n");
+				return;
+			}
+
+		    	if (xpc_get_type(event) != XPC_TYPE_DICTIONARY) {
+				printf("Received something else than a dictionary!\n");
 				return;
 			}
 

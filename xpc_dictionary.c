@@ -30,7 +30,11 @@
 #include "xpc_internal.h"
 #include "mpack.h"
 
-#define NVLIST_XPC_TYPE		"__XPC_TYPE"
+static struct xpc_object *
+mpack2xpc_extension(int8_t type, const char *data)
+{
+
+}
 
 struct xpc_object *
 mpack2xpc(const mpack_node_t node)
@@ -90,6 +94,11 @@ mpack2xpc(const mpack_node_t node)
 			    mpack_node_map_value_at(node, i));
 			xpc_dictionary_set_value(xotmp, key, value);
 		}
+		break;
+
+	case mpack_type_ext:
+		xotmp = mpack2xpc_extension(mpack_node_exttype(node),
+		    mpack_node_data(node));
 		break;
 
 	default:

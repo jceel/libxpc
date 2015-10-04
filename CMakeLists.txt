@@ -60,10 +60,21 @@ set(SOURCES
 )
 
 option(XPC_DEBUG "Adds debugging output" OFF)
+option(MACH "Adds Mach transport support" OFF)
 
 if(XPC_DEBUG)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
     add_definitions(-DXPC_DEBUG)
+endif()
+
+if(MACH)
+    set(SOURCES
+        ${SOURCES}
+        ${MACH_TRANSPORT_SOURCES}
+    )
+    include_directories(/usr/include/apple)
+    add_definitions(-DMACH -D__APPLE__)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -lSystem")
 endif()
 
 include_directories(/usr/local/include)

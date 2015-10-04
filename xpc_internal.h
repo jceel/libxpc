@@ -30,6 +30,7 @@
 
 #include <sys/queue.h>
 #include <sys/uio.h>
+#include <dispatch/dispatch.h>
 #include "mpack.h"
 
 #ifdef XPC_DEBUG
@@ -76,7 +77,7 @@ TAILQ_HEAD(xpc_array_head, xpc_object);
 typedef void *xpc_port_t;
 typedef void (*xpc_transport_init_t)();
 typedef int (*xpc_transport_listen_t)(const char *, xpc_port_t *);
-typedef int (*xpc_transport_lookup)(const char *, xpc_port_t *);
+typedef int (*xpc_transport_lookup)(const char *, xpc_port_t *, xpc_port_t *);
 typedef char *(*xpc_transport_port_to_string)(xpc_port_t);
 typedef int (*xpc_transport_port_compare)(xpc_port_t, xpc_port_t);
 typedef int (*xpc_transport_release)(xpc_port_t);
@@ -220,8 +221,9 @@ __private_extern__ struct xpc_object *mpack2xpc(mpack_node_t node);
 __private_extern__ void xpc2mpack(mpack_writer_t *writer, xpc_object_t xo);
 __private_extern__ void xpc_object_destroy(struct xpc_object *xo);
 __private_extern__ void xpc_connection_recv_message(void *);
+__private_extern__ void xpc_connection_recv_mach_message(void *);
 __private_extern__ void *xpc_connection_new_peer(void *context,
-    xpc_port_t port, dispatch_source_t src);
+    xpc_port_t local, xpc_port_t remote, dispatch_source_t src);
 __private_extern__ void xpc_connection_destroy_peer(void *context);
 __private_extern__ int xpc_pipe_send(xpc_object_t obj, uint64_t id,
     xpc_port_t local, xpc_port_t remote);

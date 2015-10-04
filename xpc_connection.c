@@ -91,7 +91,7 @@ xpc_connection_create_mach_service(const char *name, dispatch_queue_t targetq,
 		return ((xpc_connection_t)conn);
 	}
 
-	if (transport->xt_lookup(name, &conn->xc_local_port) != 0) {
+	if (transport->xt_lookup(name, &conn->xc_local_port, &conn->xc_remote_port) != 0) {
 		return (NULL);
 	}
 
@@ -368,28 +368,45 @@ xpc_connection_set_credentials(struct xpc_connection *conn, audit_token_t *tok)
 }
 #endif
 
-void *
-xpc_connection_new_peer(void *context, xpc_port_t port, dispatch_source_t src)
+struct xpc_connection *
+xpc_connection_get_peer(void *context, xpc_port_t port)
 {
 	struct xpc_transport *transport = xpc_get_transport();
 	struct xpc_connection *conn, *peer;
 
 	conn = context;
-	debugf("port=%s", transport->xt_port_to_string(port));
+	TAILQ_FOREACH(peer, &conn->xc_peers, xc_link) {
+		if (transport->xt_port_compare(port,
+		    peer->xc_remote_port)) {
+			return (peer);
+		}
+	}
+
+	return (NULL);
+}
+
+void *
+xpc_connection_new_peer(void *context, xpc_port_t local, xpc_port_t remote, dispatch_source_t src)
+{
+	struct xpc_transport *transport = xpc_get_transport();
+	struct xpc_connection *conn, *peer;
+
+	conn = context;
 	peer = (struct xpc_connection *)xpc_connection_create(NULL, NULL);
 	peer->xc_parent = conn;
-	peer->xc_local_port = port;
-	peer->xc_remote_port = port;
+	peer->xc_local_port = local;
+	peer->xc_remote_port = remote;
 	peer->xc_recv_source = src;
 
 	TAILQ_INSERT_TAIL(&conn->xc_peers, peer, xc_link);
 
-	dispatch_set_context(src, peer);
-	dispatch_resume(src);
-
-	dispatch_async(conn->xc_target_queue, ^{
-	    conn->xc_handler(peer);
-	});
+	if (src) {
+		dispatch_set_context(src, peer);
+		dispatch_resume(src);
+		dispatch_async(conn->xc_target_queue, ^{
+		    conn->xc_handler(peer);
+		});
+	}
 
 	return (peer);
 }
@@ -411,6 +428,33 @@ xpc_connection_destroy_peer(void *context)
 	}
 
 	dispatch_release(conn->xc_recv_source);
+}
+
+static void
+xpc_connection_dispatch_callback(struct xpc_connection *conn,
+    xpc_object_t result, uint64_t id)
+{
+	struct xpc_pending_call *call;
+
+	TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
+		if (call->xp_id == id) {
+			dispatch_async(conn->xc_target_queue, ^{
+			    call->xp_handler(result);
+			    TAILQ_REMOVE(&conn->xc_pending, call,
+				xp_link);
+			    free(call);
+			});
+			return;
+		}
+	}
+
+	if (conn->xc_handler) {
+		debugf("yes");
+		dispatch_async(conn->xc_target_queue, ^{
+		    debugf("calling handler=%p", conn->xc_handler);
+		    conn->xc_handler(result);
+		});
+	}
 }
 
 void
@@ -442,32 +486,14 @@ xpc_connection_recv_message(void *context)
 
 	conn->xc_creds = creds;
 
-	TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
-		if (call->xp_id == id) {
-			dispatch_async(conn->xc_target_queue, ^{
-			    call->xp_handler(result);
-			    TAILQ_REMOVE(&conn->xc_pending, call,
-				xp_link);
-			    free(call);
-			});
-			return;
-		}
-	}
-
-	if (conn->xc_handler) {
-		dispatch_async(conn->xc_target_queue, ^{
-		    debugf("calling handler=%p", conn->xc_handler);
-		    conn->xc_handler(result);
-		});
-	}
+	xpc_connection_dispatch_callback(conn, result, id);
 }
 
-#if 0
-static void
-xpc_connection_recv_message(void *context)
+void
+xpc_connection_recv_mach_message(void *context)
 {
 	struct xpc_transport *transport = xpc_get_transport();
-	struct xpc_pending_call *call;
+
 	struct xpc_connection *conn, *peer;
 	struct xpc_credentials creds;
 	xpc_object_t result;
@@ -479,62 +505,22 @@ xpc_connection_recv_message(void *context)
 
 	conn = context;
 	if (xpc_pipe_receive(conn->xc_local_port, &remote, &result, &id,
-	    &creds) != 0)
+	    &creds) < 0)
 		return;
 
 	debugf("message=%p, id=%lu, remote=%s", result, id,
 	    transport->xt_port_to_string(remote));
 
-	if (conn->xc_flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) {
-		TAILQ_FOREACH(peer, &conn->xc_peers, xc_link) {
-			if (transport->xt_port_compare(remote,
-			    peer->xc_remote_port) == 0) {
-				dispatch_async(peer->xc_target_queue, ^{
-					peer->xc_handler(result);
-				});
-				return;
-			}
-		}
-
-		debugf("new peer on port %s", transport->xt_port_to_string(remote));
-
-		/* New peer */
-		peer = (struct xpc_connection *)xpc_connection_create(NULL, NULL);
-		peer->xc_parent = conn;
-		peer->xc_local_port = conn->xc_local_port;
-		peer->xc_remote_port = remote;
-		peer->xc_creds = creds;
-
-		TAILQ_INSERT_TAIL(&conn->xc_peers, peer, xc_link);
+	peer = xpc_connection_get_peer(context, remote);
+	if (!peer) {
+		debugf("new peer on port %s",
+		    transport->xt_port_to_string(remote));
+		peer = xpc_connection_new_peer(context, conn->xc_local_port, remote, NULL);
 
 		dispatch_async(conn->xc_target_queue, ^{
-			conn->xc_handler(peer);
+		    conn->xc_handler(peer);
+		    xpc_connection_dispatch_callback(peer, result, id);
 		});
-
-		dispatch_async(peer->xc_target_queue, ^{
-			peer->xc_handler(result);
-		});
-
-	} else {
-		conn->xc_creds = creds;
-
-		TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
-			if (call->xp_id == id) {
-				dispatch_async(conn->xc_target_queue, ^{
-					call->xp_handler(result);
-					TAILQ_REMOVE(&conn->xc_pending, call,
-					    xp_link);
-					free(call);
-				});
-				return;
-			}
-		}
-
-		if (conn->xc_handler) {
-			dispatch_async(conn->xc_target_queue, ^{
-			    conn->xc_handler(result);
-			});
-		}
-	}
+	} else
+		xpc_connection_dispatch_callback(peer, result, id);
 }
-#endif

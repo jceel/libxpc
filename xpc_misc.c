@@ -40,21 +40,30 @@
 static void xpc_copy_description_level(xpc_object_t obj, struct sbuf *sbuf,
     int level);
 
-extern struct xpc_transport unix_transport;
-static struct xpc_transport *selected_transport = &unix_transport;
-
-void
-fail_log(const char *exp)
-{
-	syslog(LOG_ERR, "%s", exp);
-	//sleep(1);
-	printf("%s", exp);
-	//abort();
-}
+extern struct xpc_transport unix_transport __attribute__((weak));
+extern struct xpc_transport mach_transport __attribute__((weak));
+static struct xpc_transport *selected_transport = NULL;
 
 struct xpc_transport *
 xpc_get_transport()
 {
+	if (!selected_transport) {
+		char *env = getenv("XPC_TRANSPORT");
+		if (env) {
+			if (!strcmp(env, "unix"))
+				selected_transport = &unix_transport;
+
+			if (!strcmp(env, "mach"))
+				selected_transport = &mach_transport;
+		} else {
+#ifdef MACH
+			selected_transport = &mach_transport;
+#else
+			selected_transport = &unix_transport;
+#endif
+		}
+	}
+
 	return (selected_transport);
 }
 
@@ -414,6 +423,9 @@ xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote, xpc_object_t *result,
 	}
 
 	*id = header->id;
+
+	debugf("length=%ld", header->length);
+
 	*result = xpc_unpack(buffer + sizeof(*header), header->length);
 
 	if (*result == NULL)

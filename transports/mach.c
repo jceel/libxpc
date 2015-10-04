@@ -29,106 +29,207 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
+#include <mach/mach.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <stdbool.h>
+#include <xpc/xpc.h>
 
 #include "../xpc_internal.h"
 
-#define SOCKET_DIR "/var/run/xpc"
+#define MAX_RECV 8192
 
-
-struct unix_pipe
-{
-    char *		up_path;
-    int			up_socket;
-    bool		up_listener;
+struct xpc_message {
+    mach_msg_header_t header;
+    char body[];
 };
 
 static int
-mach_lookup(const char *name, xpc_pipe_t *pipe)
+mach_lookup(const char *name, xpc_port_t *local, xpc_port_t *remote)
 {
-	if (flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) {
-		kr = bootstrap_check_in(bootstrap_port, name,
-					&conn->xc_local_port);
-		if (kr != KERN_SUCCESS) {
-			errno = EBUSY;
-			free(conn);
-			return (NULL);
-		}
+	mach_port_t mp, rmp;
+	kern_return_t kr;
 
-		return (conn);
-	}
-
-static int
-mach_listen(const char *name, xpc_pipe_t *pipe)
-{
 	kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
-				&conn->xc_local_port);
+	    &mp);
 	if (kr != KERN_SUCCESS) {
 		errno = EPERM;
-		return (NULL);
+		return (-1);
 	}
 
-	kr = mach_port_insert_right(mach_task_self(), conn->xc_local_port,
-				    conn->xc_local_port, MACH_MSG_TYPE_MAKE_SEND);
+	kr = mach_port_insert_right(mach_task_self(), mp, mp,
+	    MACH_MSG_TYPE_MAKE_SEND);
 	if (kr != KERN_SUCCESS) {
 		errno = EPERM;
-		return (NULL);
+		return (-1);
 	}
+
+	kr = bootstrap_look_up(bootstrap_port, name, &rmp);
+	if (kr != KERN_SUCCESS) {
+		debugf("bootstrap_look_up failed kr=%d", kr);
+		errno = EBUSY;
+		return (-1);
+	}
+
+	*local = (xpc_port_t)mp;
+	*remote = (xpc_port_t)rmp;
+	return (0);
 }
 
 static int
-mach_send(xpc_pipe_t pipe, struct iovec *iov, struct xpc_resource *res, size_t nres)
+mach_listen(const char *name, xpc_port_t *port)
 {
+	mach_port_t mp;
+	kern_return_t kr;
 
+	kr = bootstrap_check_in(bootstrap_port, name, &mp);
+	if (kr != KERN_SUCCESS) {
+		debugf("bootstrap_check_in failed kr=%d", kr);
+		errno = EBUSY;
+		return (-1);
+	}
+
+	*port = mp;
+	return (0);
+}
+
+static char *
+mach_port_to_string(xpc_port_t port)
+{
+	mach_port_t p = (mach_port_t)port;
+	char *ret;
+
+	asprintf(&ret, "<%d>", p);
+	return (ret);
 }
 
 static int
-mach_recv(xpc_pipe_t pipe, struct iovec *iov, struct xpc_resource **res, size_t *nres)
+mach_port_compare(xpc_port_t p1, xpc_port_t p2)
 {
-	struct xpc_recv_message message;
+	return (mach_port_t)p1 == (mach_port_t)p2;
+}
+
+static dispatch_source_t
+mach_create_client_source(xpc_port_t port, void *context, dispatch_queue_t tq)
+{
+	mach_port_t mp = (mach_port_t)port;
+	dispatch_source_t ret;
+
+	ret = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV,
+	    (uintptr_t)mp, 0, tq);
+
+	dispatch_set_context(ret, context);
+	dispatch_source_set_event_handler_f(ret, xpc_connection_recv_message);
+	dispatch_source_set_cancel_handler(ret, ^{
+	    xpc_connection_destroy_peer(dispatch_get_context(ret));
+	});
+
+	return (ret);
+}
+
+static dispatch_source_t
+mach_create_server_source(xpc_port_t port, void *context, dispatch_queue_t tq)
+{
+	mach_port_t mp = (mach_port_t)port;
+	void *client_ctx;
+	dispatch_source_t ret;
+
+	ret = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV,
+	    (uintptr_t)mp, 0, tq);
+
+	dispatch_set_context(ret, context);
+	dispatch_source_set_event_handler_f(ret,
+	    xpc_connection_recv_mach_message);
+	
+	return (ret);
+}
+
+static int
+mach_send(xpc_port_t local, xpc_port_t remote, void *buf, size_t len,
+    struct xpc_resource *res, size_t nres)
+{
+	mach_port_t src, dst;
+	struct xpc_object *xo;
+	size_t size, msg_size;
+	struct xpc_message *message;
+	kern_return_t kr;
+	int err = 0;
+
+	message = malloc(sizeof(struct xpc_message) + len);
+	src = (mach_port_t)local;
+	dst = (mach_port_t)remote;
+
+	debugf("local=%d remote=%d", src, dst);
+
+	msg_size = _ALIGN(len + sizeof(struct xpc_message));
+	message->header.msgh_size = msg_size;
+	message->header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
+	    MACH_MSG_TYPE_MAKE_SEND);
+	message->header.msgh_remote_port = dst;
+	message->header.msgh_local_port = src;
+	memcpy(&message->body, buf, len);
+	kr = mach_msg_send(&message->header);
+
+	if (kr != KERN_SUCCESS) {
+		debugf("failed, kr=%d", kr);
+		err = (kr == KERN_INVALID_TASK) ? EPIPE : EINVAL;
+	}
+
+	free(message);
+	return (err);
+}
+
+static int
+mach_recv(xpc_port_t local, xpc_port_t *remote, void *buf, size_t len,
+    struct xpc_resource **res, size_t *nres, struct xpc_credentials *creds)
+{
+	struct xpc_message *message;
+	mach_port_t src;
 	mach_msg_header_t *request;
 	kern_return_t kr;
 	mig_reply_error_t response;
 	mach_msg_trailer_t *tr;
 	int data_size;
-	struct xpc_object *xo;
 	audit_token_t *auditp;
-	xpc_u val;
 
-	request = &message.header;
-	/* should be size - but what about arbitrary XPC data? */
+	message = malloc(sizeof(struct xpc_message) + sizeof(mach_msg_trailer_t) + len);
+	src = (mach_port_t)local;
+
+	request = &message->header;
 	request->msgh_size = MAX_RECV;
-	request->msgh_local_port = local;
-	kr = mach_msg(request, MACH_RCV_MSG |
-			       MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
-			       MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT),
-		      0, request->msgh_size, request->msgh_local_port,
-		      MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+	request->msgh_local_port = src;
 
-	if (kr != 0)
-		LOG("mach_msg_receive returned %d\n", kr);
-	*remote = request->msgh_remote_port;
-	*id = message.id;
-	data_size = message.size;
+	kr = mach_msg(request, MACH_RCV_MSG |
+	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
+	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT), 0,
+	    request->msgh_size, request->msgh_local_port,
+	    MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+
+	if (kr != 0) {
+		debugf("failed, kr=%d", kr);
+		return (-1);
+	}
+
+	debugf("msgh_size=%d", message->header.msgh_size);
+
+	*remote = (xpc_port_t)request->msgh_remote_port;
+	memcpy(buf, &message->body, message->header.msgh_size);
 
 	tr = (mach_msg_trailer_t *)(((char *)&message) + request->msgh_size);
 	auditp = &((mach_msg_audit_trailer_t *)tr)->msgh_audit;
 
-	xo->xo_audit_token = malloc(sizeof(*auditp));
-	memcpy(xo->xo_audit_token, auditp, sizeof(*auditp));
-
-	xpc_dictionary_set_mach_send(xo, XPC_RPORT, request->msgh_remote_port);
-	xpc_dictionary_set_uint64(xo, XPC_SEQID, message.id);
-	*result = xo;
-	return (0);
+	return (message->header.msgh_size - sizeof(struct xpc_message));
 }
 
-static struct xpc_transport unix_transport = {
-	.listen = mach_listen,
-	.lookup = mach_lookup,
-	.get_credentials = mach_get_credentials,
-	.send = mach_send,
-	.recv = mach_recv
+struct xpc_transport mach_transport = {
+    	.xt_name = "mach",
+	.xt_listen = mach_listen,
+	.xt_lookup = mach_lookup,
+    	.xt_port_to_string = mach_port_to_string,
+    	.xt_port_compare = mach_port_compare,
+    	.xt_create_client_source = mach_create_client_source,
+    	.xt_create_server_source = mach_create_server_source,
+	.xt_send = mach_send,
+	.xt_recv = mach_recv
 };

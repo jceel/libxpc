@@ -43,7 +43,7 @@
 
 #define SOCKET_DIR "/var/run/xpc"
 
-static int unix_lookup(const char *name, xpc_port_t *port);
+static int unix_lookup(const char *name, xpc_port_t *local, xpc_port_t *remote);
 static int unix_listen(const char *name, xpc_port_t *port);
 static int unix_release(xpc_port_t port);
 static char *unix_port_to_string(xpc_port_t port);
@@ -59,7 +59,7 @@ static int unix_recv(xpc_port_t local, xpc_port_t *remote, void *buf,
     struct xpc_credentials *creds);
 
 static int
-unix_lookup(const char *name, xpc_port_t *port)
+unix_lookup(const char *name, xpc_port_t *port, xpc_port_t *unused __unused)
 {
 	struct sockaddr_un addr;
 	int ret;
@@ -184,7 +184,7 @@ unix_create_server_source(xpc_port_t port, void *context, dispatch_queue_t tq)
 	    	sock = accept(fd, NULL, NULL);
 	    	client_port = (xpc_port_t)(long)sock;
 	    	client_source = unix_create_client_source(client_port, NULL, tq);
-	    	xpc_connection_new_peer(context, client_port, client_source);
+	    	xpc_connection_new_peer(context, client_port, -1, client_source);
 	});
 
 	return (ret);

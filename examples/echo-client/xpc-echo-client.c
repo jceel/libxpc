@@ -65,10 +65,7 @@ main(int argc, char *argv[])
 	});
 
 	xpc_connection_resume(conn);
-	xpc_connection_send_message_with_reply(conn, msg, NULL, ^(xpc_object_t resp) {
-		printf("Received first message: %p\n", resp);
-		printf("%s\n", xpc_copy_description(resp));
-	});
+	xpc_connection_send_message(conn, msg);
 
 	xpc_connection_send_message_with_reply(conn, msg, NULL, ^(xpc_object_t resp) {
 		printf("Received second message: %p\n", resp);
